@@ -81,13 +81,24 @@
     await sleep(800);
   }
 
+  /* Liste lesen, aber erst wenn sie stabil und vollständig ist (XING zeigt nach dem Wechsel kurz eine ungefilterte Liste) */
   async function readList(kind, base) {
     await goList(kind, base);
-    var n = jobCount(); var items = [];
-    var btns = actionBtns();
-    for (var i = 0; i < btns.length; i++) { var ci = cardInfo(btns[i]); if (!ci) return { err: 'Anzeigen konnten nicht gelesen werden.' }; items.push(ci); }
-    if (n !== null && n !== items.length) return { err: 'Die Liste ist nicht vollständig geladen (' + items.length + ' von ' + n + '). Bitte Seite neu laden (F5) und nochmal klicken.' };
-    return { items: items };
+    var last = null, start = Date.now();
+    while (Date.now() - start < 30000) {
+      var n = jobCount(); var items = []; var bad = false;
+      var btns = actionBtns();
+      for (var i = 0; i < btns.length; i++) { var ci = cardInfo(btns[i]); if (!ci) { bad = true; break; } items.push(ci); }
+      var empty = !btns.length && (n === 0 || /Keine\s+(aktiven|inaktiven)\s+Stellenanzeigen/.test(document.body.innerText));
+      var complete = !bad && ((n !== null && n === items.length && n > 0) || empty);
+      var uid = (/userIds=([^&]+)/.exec(location.search) || [])[1];
+      var ownUid = (/userIds=([^&]+)/.exec(base || '') || [])[1];
+      var sig = items.map(function (x) { return x.key + '#' + x.creator; }).join('~') + '|' + n;
+      if (complete && uid === ownUid && sig === last) return { items: items };
+      last = complete ? sig : null;
+      await sleep(1200);
+    }
+    return { err: 'Die Liste ist nicht vollständig geladen worden. Bitte Seite neu laden (F5) und nochmal klicken.' };
   }
 
   (async function () {
@@ -153,9 +164,10 @@
       for (var t = 0; t < todo.length && !stopped; t++) {
         var job = todo[t];
         say('Veröffentliche ' + (t + 1) + ' von ' + todo.length + ': ' + job.title.slice(0, 50));
-        await goList('inactive', baseSearch);
+        var cur = await readList('inactive', baseSearch);
+        if (cur.err) { finish(cur.err + ' ' + done + ' veröffentlicht.'); return; }
         var btns = actionBtns();
-        var ci = btns[job.idx] && cardInfo(btns[job.idx]);
+        var ci = btns[job.idx] && cur.items[job.idx];
         if (!ci || ci.key !== job.key || ci.creator !== who) { finish('Sicherheitsstopp: Die Liste sieht anders aus als erwartet. ' + done + ' veröffentlicht. Seite neu laden (F5) und Lesezeichen nochmal klicken (schon aktive werden übersprungen).'); return; }
         click(btns[job.idx]);
         var item = await waitFor(function () { return byText('[role=menuitem]', /^Als Vorlage verwenden$/); }, 6000);

@@ -102,8 +102,10 @@
       if (!ok) { finish('Abgebrochen. Es wurde nichts verändert.'); return; }
 
       /* 4. Schleife */
-      var done = 0, fails = 0, total = n0;
+      var done = 0, fails = 0, total = n0, minSeen = n0, attempts = 0;
       while (!stopped) {
+        /* Notbremse: nie mehr Versuche als Anzeigen + 3 */
+        if (++attempts > total + 3) { finish('Abbruch zur Sicherheit: Einige Anzeigen lassen sich nicht deaktivieren (' + done + ' deaktiviert). Seite neu laden (F5) und prüfen, was in XING noch aktiv ist.', true); return; }
         /* Nach jeder Seite lädt XING die Liste neu: kurz warten, nicht vorschnell „fertig“ melden */
         await waitFor(function () { return cards().length > 0 || jobCount() === 0; }, 12000);
         var left = jobCount();
@@ -129,10 +131,14 @@
           done++; await sleep(800); continue;
         }
         click(confirmBtn);
-        var before = left;
+        var before = Math.min(left, minSeen);
         var changed = await waitFor(function () { var n = jobCount(); return n !== null && n < before; }, 15000);
         if (!changed) { if (++fails > 3) { finish('Die Liste hat sich nicht aktualisiert. ' + done + ' deaktiviert.', true); return; } continue; }
-        fails = 0; done++; await sleep(600);
+        /* Erst kurz warten und prüfen, dass die Zahl auch dauerhaft niedriger bleibt (XING zeigt sonst kurz falsche Zahlen) */
+        await sleep(2500);
+        var now = jobCount();
+        if (now === null || now >= before) { if (++fails > 3) { finish('Eine Anzeige lässt sich bei XING nicht deaktivieren. ' + done + ' deaktiviert.', true); return; } continue; }
+        minSeen = now; fails = 0; done++; await sleep(600);
       }
       finish((stopped ? 'Gestoppt. ' : 'Fertig. ') + done + ' Anzeigen ' + (DRY ? 'im Probelauf durchgespielt (nichts deaktiviert).' : 'deaktiviert.'), true);
     } catch (e) {

@@ -130,7 +130,7 @@
       var act = await readList('active', baseSearch);
       if (act.err) { finish(act.err); return; }
       var who = ina.items[0].creator;
-      for (var q = 0; q < ina.items.length; q++) if (ina.items[q].creator !== who) { finish('Sicherheitsstopp: Die Liste enthält Anzeigen von mehreren Personen. Abbruch, es wurde nichts verändert.'); return; }
+      for (var q = 0; q < ina.items.length; q++) if (ina.items[q].creator !== who) { finish('Sicherheitsstopp: Die Liste enthält Anzeigen von mehreren Personen (' + who + ' / ' + ina.items[q].creator + ', ' + ina.items.length + ' Anzeigen, Adresse: ' + location.search.slice(0, 120) + '). Abbruch, es wurde nichts verändert.'); return; }
       for (q = 0; q < act.items.length; q++) if (act.items[q].creator !== who) { finish('Sicherheitsstopp: Die aktive Liste enthält Anzeigen von mehreren Personen. Abbruch, es wurde nichts verändert.'); return; }
 
       /* 4. Was fehlt? Gleicher Titel + Ort schon aktiv → überspringen */

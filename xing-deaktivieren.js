@@ -104,8 +104,14 @@
       /* 4. Schleife */
       var done = 0, fails = 0, total = n0;
       while (!stopped) {
+        /* Nach jeder Seite lädt XING die Liste neu: kurz warten, nicht vorschnell „fertig“ melden */
+        await waitFor(function () { return cards().length > 0 || jobCount() === 0; }, 12000);
         var left = jobCount();
-        if (left === 0 || !cards().length) break;
+        if (left === 0) break;
+        if (!cards().length) {
+          if (++fails > 3) { finish('Die Liste wurde nicht mehr geladen. ' + done + ' deaktiviert. Seite neu laden (F5) und Lesezeichen nochmal klicken.', true); return; }
+          await sleep(1500); continue;
+        }
         if (DRY && done >= 2) break;
         var btn = cards()[0];
         var c = btn; for (var j = 0; j < 8 && c && !/Erstellt von/.test(c.innerText); j++) c = c.parentElement;

@@ -30,10 +30,11 @@
     stopBtn.remove(); return;
   }
   window.__truvaRunning = true;
+  var origPushEarly = history.pushState;
   var DRY = !!window.__TRUVA_DRY;
   var stopped = false;
   stopBtn.onclick = function () { stopped = true; say('Wird nach der aktuellen Anzeige gestoppt …'); };
-  function finish(t) { say(t); stopBtn.remove(); window.__truvaRunning = false; }
+  function finish(t) { say(t); stopBtn.remove(); window.__truvaRunning = false; try { history.pushState = origPushEarly; } catch (e) {} }
 
   var sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
   var waitFor = async function (fn, t) {
@@ -69,6 +70,10 @@
     return { title: lines[i - 3], loc: lines[i - 1], creator: lines[i].replace(/^Erstellt von\s+/, ''), key: lines[i - 3] + '|' + lines[i - 1] };
   }
 
+  /* Zählt, wie viele Schritte der Assistent in den Browser-Verlauf schreibt, damit wir ohne Neuladen zurückgehen können */
+  var pushes = 0, origPush = history.pushState;
+  history.pushState = function () { pushes++; return origPush.apply(this, arguments); };
+  var restore = function () { history.pushState = origPush; };
   var uidOf = function () { return (/userIds=([^&]+)/.exec(location.search) || [])[1] || ''; };
   var pageOf = function () { return parseInt((/[?&]page=(\d+)/.exec(location.search) || [])[1] || '1', 10); };
 
@@ -197,6 +202,7 @@
         if (cur.err) { finish(cur.err + ' ' + done + ' veröffentlicht.'); return; }
         var btns = actionBtns(), ci = cur.items[pos];
         if (!btns[pos] || !ci || ci.key !== job.key || ci.creator !== who) { finish('Sicherheitsstopp: Die Liste sieht anders aus als erwartet. ' + done + ' veröffentlicht. Seite neu laden (F5) und Lesezeichen nochmal klicken (schon aktive werden übersprungen).'); return; }
+        var listUrl = location.pathname + location.search; pushes = 0;
         click(btns[pos]);
         var item = await waitFor(function () { return byText('[role=menuitem]', /^Als Vorlage verwenden$/); }, 6000);
         if (!item) { finish('Menü „Als Vorlage verwenden“ nicht gefunden. ' + done + ' veröffentlicht.'); return; }
@@ -231,9 +237,16 @@
         }
         if (!published) { finish('Die Anzeige konnte nicht veröffentlicht werden. ' + done + ' veröffentlicht. Es kann ein Entwurf übrig sein.'); return; }
         done++; await sleep(800);
-        /* Zurück zur Liste */
-        var back = byText('button,a', /^Zu den Stellenanzeigen$/);
-        if (back) { click(back); await sleep(2000); }
+        /* Zurück zur Liste – ohne Neuladen, sonst endet das Skript */
+        var steps = pushes;
+        if (steps > 0) history.go(-steps);
+        var back = await waitFor(function () { return path().indexOf('/list/') !== -1; }, 6000);
+        if (!back) {
+          history.pushState({}, '', listUrl);
+          window.dispatchEvent(new PopStateEvent('popstate', { state: {} }));
+          await waitFor(function () { return path().indexOf('/list/') !== -1; }, 6000);
+        }
+        await sleep(1500);
       }
       if (await showTab('inactive')) { /* Liste zum Schluss anzeigen */ }
       finish((stopped ? 'Gestoppt. ' : 'Fertig. ') + done + ' Anzeigen wieder veröffentlicht.' + (stopped && done < todo.length ? ' Zum Rest einfach nochmal klicken (schon aktive werden übersprungen).' : ''));

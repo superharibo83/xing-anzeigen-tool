@@ -69,82 +69,106 @@
     return { title: lines[i - 3], loc: lines[i - 1], creator: lines[i].replace(/^Erstellt von\s+/, ''), key: lines[i - 3] + '|' + lines[i - 1] };
   }
 
-  /* Ohne Neuladen zu einer Liste wechseln (die Seite ist eine Single-Page-App) */
-  async function goList(kind, base) {
-    var p = new URLSearchParams(base || location.search);
-    p.set('listType', kind === 'inactive' ? 'INACTIVE' : 'ACTIVE');
-    p.set('page', '1'); p.set('perPage', '100');
-    history.pushState({}, '', '/recruiter/xing-jobs/list/' + kind + '?' + p.toString());
-    window.dispatchEvent(new PopStateEvent('popstate', { state: {} }));
-    await sleep(1200);
-    await waitFor(function () { return actionBtns().length > 0 || jobCount() === 0; }, 15000);
-    await sleep(800);
+  var uidOf = function () { return (/userIds=([^&]+)/.exec(location.search) || [])[1] || ''; };
+  var pageOf = function () { return parseInt((/[?&]page=(\d+)/.exec(location.search) || [])[1] || '1', 10); };
+
+  /* Filter „(Sie)“ setzen, falls nötig. Gibt true zurück, wenn genau ein Berater gefiltert ist */
+  async function ensureFilter() {
+    if (!uidOf()) {
+      var input = Array.prototype.slice.call(document.querySelectorAll('input')).filter(function (i) { return vis(i) && /Recruiter/i.test(i.placeholder || ''); })[0];
+      if (!input) return 'Der Recruiter-Filter wurde nicht gefunden. Die Seite hat sich wohl geändert.';
+      click(input); input.focus();
+      var opt = await waitFor(function () {
+        return Array.prototype.slice.call(document.querySelectorAll('label,li,[role=option],[role=menuitem],div')).filter(function (e) {
+          return vis(e) && e.children.length < 4 && /^\(Sie\)/.test((e.innerText || '').trim());
+        }).sort(function (a, b) { return a.innerText.length - b.innerText.length; })[0];
+      }, 8000);
+      if (!opt) return 'Dein Name („(Sie)“) steht nicht im Filter.';
+      click(opt);
+      await waitFor(function () { return uidOf(); }, 8000);
+      await sleep(1500);
+      document.body.click();
+    }
+    if (!uidOf()) return 'Der Filter konnte nicht gesetzt werden.';
+    if (/,|%2C/i.test(uidOf())) return 'Es sind mehrere Berater gefiltert.';
+    return '';
   }
 
-  /* Liste lesen, aber erst wenn sie stabil und vollständig ist (XING zeigt nach dem Wechsel kurz eine ungefilterte Liste) */
-  async function readList(kind, base) {
-    await goList(kind, base);
+  /* Auf Tab „Aktiv“ bzw. „Inaktiv“ wechseln (anklicken wie ein Mensch) */
+  async function showTab(kind) {
+    if (location.pathname.indexOf('/list/' + kind) === -1) {
+      var re = kind === 'inactive' ? /^Inaktiv\s*\d*$/ : /^Aktiv\s*\d*$/;
+      var tab = byText('a,button,[role=tab]', re);
+      if (!tab) return false;
+      click(tab);
+      await waitFor(function () { return location.pathname.indexOf('/list/' + kind) !== -1; }, 10000);
+      await sleep(1500);
+    }
+    return location.pathname.indexOf('/list/' + kind) !== -1;
+  }
+
+  async function goPage(p) {
+    if (pageOf() === p) return true;
+    var link = Array.prototype.slice.call(document.querySelectorAll('nav a,nav button')).filter(function (b) {
+      return vis(b) && (b.getAttribute('aria-label') || '') === 'Gehe zu Seite ' + p;
+    })[0];
+    if (!link) return false;
+    click(link);
+    await waitFor(function () { return pageOf() === p; }, 10000);
+    await sleep(1000);
+    return pageOf() === p;
+  }
+
+  /* Eine Seite der Liste lesen, aber erst wenn sie stabil, vollständig und gefiltert ist */
+  async function readPage(ownUid) {
     var last = null, start = Date.now();
     while (Date.now() - start < 30000) {
       var n = jobCount(); var items = []; var bad = false;
       var btns = actionBtns();
       for (var i = 0; i < btns.length; i++) { var ci = cardInfo(btns[i]); if (!ci) { bad = true; break; } items.push(ci); }
+      var want = n === null ? -1 : Math.min(10, n - 10 * (pageOf() - 1));
       var empty = !btns.length && (n === 0 || /Keine\s+(aktiven|inaktiven)\s+Stellenanzeigen/.test(document.body.innerText));
-      var complete = !bad && ((n !== null && n === items.length && n > 0) || empty);
-      var uid = (/userIds=([^&]+)/.exec(location.search) || [])[1];
-      var ownUid = (/userIds=([^&]+)/.exec(base || '') || [])[1];
-      var sig = items.map(function (x) { return x.key + '#' + x.creator; }).join('~') + '|' + n;
-      if (complete && uid === ownUid && sig === last) return { items: items };
+      var complete = !bad && ((want > 0 && items.length === want) || empty);
+      var sig = items.map(function (x) { return x.key + '#' + x.creator; }).join('~') + '|' + n + '|' + pageOf();
+      if (complete && uidOf() === ownUid && sig === last) return { items: items, n: empty ? 0 : n };
       last = complete ? sig : null;
       await sleep(1200);
     }
     return { err: 'Die Liste ist nicht vollständig geladen worden. Bitte Seite neu laden (F5) und nochmal klicken.' };
   }
 
+  /* Eine ganze Liste (alle Seiten) lesen */
+  async function readAll(kind, ownUid) {
+    if (!await showTab(kind)) return { err: 'Der Tab „' + (kind === 'inactive' ? 'Inaktiv' : 'Aktiv') + '“ wurde nicht gefunden.' };
+    var f = await ensureFilter(); if (f) return { err: f };
+    if (ownUid && uidOf() !== ownUid) return { err: 'Der Berater-Filter hat sich geändert. Abbruch.' };
+    ownUid = uidOf();
+    if (!await goPage(1)) return { err: 'Seite 1 der Liste nicht erreichbar.' };
+    var all = [], n = null;
+    for (var p = 1; ; p++) {
+      var r = await readPage(ownUid); if (r.err) return r;
+      all = all.concat(r.items); n = r.n;
+      if (all.length >= n) break;
+      if (!await goPage(p + 1)) return { err: 'Seite ' + (p + 1) + ' der Liste nicht erreichbar.' };
+    }
+    return { items: all, uid: ownUid };
+  }
+
   (async function () {
     try {
-      /* 1. Tab „Inaktiv“ */
-      say('Öffne die Liste „Inaktiv“ …');
-      if (location.pathname.indexOf('/list/inactive') === -1) {
-        var tab = byText('a,button,[role=tab]', /^Inaktiv\s*\d*$/);
-        if (!tab) { finish('Bitte die Liste „Inaktiv“ öffnen und nochmal klicken.'); return; }
-        click(tab); await sleep(1800);
-      }
-      await waitFor(function () { return actionBtns().length > 0 || jobCount() === 0; }, 15000);
-
-      /* 2. Filter auf „(Sie)“ */
-      say('Filtere auf deine Anzeigen …');
-      var input = Array.prototype.slice.call(document.querySelectorAll('input')).filter(function (i) { return vis(i) && /Recruiter/i.test(i.placeholder || ''); })[0];
-      if (!input) { finish('Der Recruiter-Filter wurde nicht gefunden. Die Seite hat sich wohl geändert.'); return; }
-      if (!/userIds=[^&]+/.test(location.search)) {
-        click(input); input.focus();
-        var opt = await waitFor(function () {
-          return Array.prototype.slice.call(document.querySelectorAll('label,li,[role=option],[role=menuitem],div')).filter(function (e) {
-            return vis(e) && e.children.length < 4 && /^\(Sie\)/.test((e.innerText || '').trim());
-          }).sort(function (a, b) { return a.innerText.length - b.innerText.length; })[0];
-        }, 8000);
-        if (!opt) { finish('Dein Name („(Sie)“) steht nicht im Filter. Abbruch, es wurde nichts verändert.'); return; }
-        click(opt);
-        await waitFor(function () { return /userIds=[^&]+/.test(location.search); }, 8000);
-        await sleep(1500);
-        document.body.click();
-      }
-      if (!/userIds=[^&]+/.test(location.search)) { finish('Der Filter konnte nicht gesetzt werden. Abbruch, es wurde nichts verändert.'); return; }
-      if (/userIds=[^&]*,/.test(location.search) || /userIds=[^&]*%2C/i.test(location.search)) { finish('Es sind mehrere Berater gefiltert. Abbruch, es wurde nichts verändert.'); return; }
-      var baseSearch = location.search;
-
-      /* 3. Inaktive und aktive Anzeigen einlesen */
-      say('Lese deine Anzeigen ein …');
-      var ina = await readList('inactive', baseSearch);
-      if (ina.err) { finish(ina.err); return; }
+      say('Lese deine deaktivierten Anzeigen ein …');
+      var ina = await readAll('inactive');
+      if (ina.err) { finish(ina.err + ' Es wurde nichts verändert.'); return; }
       if (!ina.items.length) { finish('Du hast keine deaktivierten Anzeigen.'); return; }
-      var act = await readList('active', baseSearch);
-      if (act.err) { finish(act.err); return; }
-      var who = ina.items[0].creator;
-      for (var q = 0; q < ina.items.length; q++) if (ina.items[q].creator !== who) { finish('Sicherheitsstopp: Die Liste enthält Anzeigen von mehreren Personen (' + who + ' / ' + ina.items[q].creator + ', ' + ina.items.length + ' Anzeigen, Adresse: ' + location.search.slice(0, 120) + '). Abbruch, es wurde nichts verändert.'); return; }
+      var ownUid = ina.uid;
+      say('Lese deine aktiven Anzeigen ein …');
+      var act = await readAll('active', ownUid);
+      if (act.err) { finish(act.err + ' Es wurde nichts verändert.'); return; }
+      var who = ina.items[0].creator, q;
+      for (q = 0; q < ina.items.length; q++) if (ina.items[q].creator !== who) { finish('Sicherheitsstopp: Die Liste enthält Anzeigen von mehreren Personen (' + who + ' / ' + ina.items[q].creator + '). Abbruch, es wurde nichts verändert.'); return; }
       for (q = 0; q < act.items.length; q++) if (act.items[q].creator !== who) { finish('Sicherheitsstopp: Die aktive Liste enthält Anzeigen von mehreren Personen. Abbruch, es wurde nichts verändert.'); return; }
 
-      /* 4. Was fehlt? Gleicher Titel + Ort schon aktiv → überspringen */
+      /* Was fehlt? Gleicher Titel + Ort schon aktiv → überspringen */
       var have = {}; act.items.forEach(function (a) { have[a.key] = (have[a.key] || 0) + 1; });
       var todo = [], skipped = 0;
       ina.items.forEach(function (it, idx) {
@@ -159,17 +183,21 @@
       if (!ok) { finish('Abgebrochen. Es wurde nichts verändert.'); return; }
       if (DRY) { finish('Probelauf: ' + todo.length + ' Anzeigen würden veröffentlicht, ' + skipped + ' übersprungen. Es wurde nichts verändert.'); return; }
 
-      /* 5. Schleife */
+      /* Schleife */
       var done = 0;
       for (var t = 0; t < todo.length && !stopped; t++) {
         var job = todo[t];
         say('Veröffentliche ' + (t + 1) + ' von ' + todo.length + ': ' + job.title.slice(0, 50));
-        var cur = await readList('inactive', baseSearch);
+        if (!await showTab('inactive')) { finish('Tab „Inaktiv“ nicht gefunden. ' + done + ' veröffentlicht.'); return; }
+        var f = await ensureFilter(); if (f) { finish(f + ' ' + done + ' veröffentlicht.'); return; }
+        if (uidOf() !== ownUid) { finish('Der Berater-Filter hat sich geändert. ' + done + ' veröffentlicht.'); return; }
+        var pg = Math.floor(job.idx / 10) + 1, pos = job.idx % 10;
+        if (!await goPage(pg)) { finish('Seite ' + pg + ' der Liste nicht erreichbar. ' + done + ' veröffentlicht.'); return; }
+        var cur = await readPage(ownUid);
         if (cur.err) { finish(cur.err + ' ' + done + ' veröffentlicht.'); return; }
-        var btns = actionBtns();
-        var ci = btns[job.idx] && cur.items[job.idx];
-        if (!ci || ci.key !== job.key || ci.creator !== who) { finish('Sicherheitsstopp: Die Liste sieht anders aus als erwartet. ' + done + ' veröffentlicht. Seite neu laden (F5) und Lesezeichen nochmal klicken (schon aktive werden übersprungen).'); return; }
-        click(btns[job.idx]);
+        var btns = actionBtns(), ci = cur.items[pos];
+        if (!btns[pos] || !ci || ci.key !== job.key || ci.creator !== who) { finish('Sicherheitsstopp: Die Liste sieht anders aus als erwartet. ' + done + ' veröffentlicht. Seite neu laden (F5) und Lesezeichen nochmal klicken (schon aktive werden übersprungen).'); return; }
+        click(btns[pos]);
         var item = await waitFor(function () { return byText('[role=menuitem]', /^Als Vorlage verwenden$/); }, 6000);
         if (!item) { finish('Menü „Als Vorlage verwenden“ nicht gefunden. ' + done + ' veröffentlicht.'); return; }
         click(item);
@@ -203,8 +231,11 @@
         }
         if (!published) { finish('Die Anzeige konnte nicht veröffentlicht werden. ' + done + ' veröffentlicht. Es kann ein Entwurf übrig sein.'); return; }
         done++; await sleep(800);
+        /* Zurück zur Liste */
+        var back = byText('button,a', /^Zu den Stellenanzeigen$/);
+        if (back) { click(back); await sleep(2000); }
       }
-      await goList('inactive', baseSearch);
+      if (await showTab('inactive')) { /* Liste zum Schluss anzeigen */ }
       finish((stopped ? 'Gestoppt. ' : 'Fertig. ') + done + ' Anzeigen wieder veröffentlicht.' + (stopped && done < todo.length ? ' Zum Rest einfach nochmal klicken (schon aktive werden übersprungen).' : ''));
     } catch (e) {
       finish('Fehler: ' + e.message);

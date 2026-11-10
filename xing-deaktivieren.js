@@ -5,9 +5,25 @@
  */
 (function () {
   'use strict';
-  if (window.__truvaRunning) { alert('Das Skript läuft schon. Bitte kurz warten.'); return; }
+  var old = document.getElementById('truva-xing-box'); if (old) old.remove();
+  var box = document.createElement('div');
+  box.id = 'truva-xing-box';
+  box.style.cssText = 'position:fixed;top:16px;right:16px;z-index:2147483647;background:#0b1f3a;color:#fff;padding:14px 16px;border-radius:10px;font:14px/1.4 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.35);max-width:320px';
+  var msg = document.createElement('div');
+  msg.textContent = 'TRUVA-Skript geladen …';
+  var stopBtn = document.createElement('button');
+  stopBtn.textContent = 'Stopp';
+  stopBtn.style.cssText = 'margin-top:8px;padding:4px 12px;border:0;border-radius:6px;cursor:pointer';
+  var closeBtn = document.createElement('button');
+  closeBtn.textContent = 'Schließen';
+  closeBtn.style.cssText = 'margin:8px 0 0 8px;padding:4px 12px;border:0;border-radius:6px;cursor:pointer;display:none';
+  closeBtn.onclick = function () { box.remove(); };
+  box.appendChild(msg); box.appendChild(stopBtn); box.appendChild(closeBtn); document.body.appendChild(box);
+  function say(t) { msg.textContent = t; }
+  function endBox(t) { say(t); stopBtn.style.display = 'none'; closeBtn.style.display = 'inline-block'; }
+  if (window.__truvaRunning) { endBox('Das Skript läuft schon. Bitte kurz warten.'); return; }
   if (!/\.onlyfy\.io$/.test(location.hostname) || location.pathname.indexOf('/recruiter/xing-jobs') !== 0) {
-    alert('Bitte zuerst den XING Jobmanager (Seite „Stellenanzeigen“) öffnen und dann nochmal klicken.');
+    endBox('Bitte erst den XING Jobmanager (Seite „Stellenanzeigen“) öffnen, einloggen und dann dieses Lesezeichen anklicken. Auf dieser Seite hier passiert nichts.');
     return;
   }
   window.__truvaRunning = true;
@@ -37,18 +53,9 @@
   var cards = function () { return Array.prototype.slice.call(document.querySelectorAll('button[aria-label="Item actions"]')).filter(vis); };
   var jobCount = function () { var m = document.body.innerText.match(/(\d+)\s+Jobs?\b/); return m ? parseInt(m[1], 10) : null; };
 
-  /* Fortschrittsfenster */
-  var box = document.createElement('div');
-  box.style.cssText = 'position:fixed;top:16px;right:16px;z-index:2147483647;background:#0b1f3a;color:#fff;padding:14px 16px;border-radius:10px;font:14px/1.4 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.35);max-width:320px';
-  var msg = document.createElement('div');
-  var stopBtn = document.createElement('button');
-  stopBtn.textContent = 'Stopp';
-  stopBtn.style.cssText = 'margin-top:8px;padding:4px 12px;border:0;border-radius:6px;cursor:pointer';
   stopBtn.onclick = function () { stopped = true; say('Wird nach der aktuellen Anzeige gestoppt …'); };
-  box.appendChild(msg); box.appendChild(stopBtn); document.body.appendChild(box);
-  function say(t) { msg.textContent = t; }
   function finish(t, keep) {
-    say(t); stopBtn.remove(); window.__truvaRunning = false;
+    endBox(t); window.__truvaRunning = false;
     if (!keep) setTimeout(function () { box.remove(); }, 15000);
   }
 
